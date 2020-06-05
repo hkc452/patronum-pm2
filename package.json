@@ -1,0 +1,11 @@
+{
+  "name": "patronum-pm2",
+  "version": "1.0.0",
+  "description": "pm2 源码解析",
+  "scripts": {
+    "init": "docsify init ./docs",
+    "dev": "docsify serve docs"
+  },
+  "author": "hkc",
+  "license": "BSD-2-Clause"
+}
