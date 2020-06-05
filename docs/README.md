@@ -1,4 +1,4 @@
-# Patronum-PM2
+# Patronum-PM2 [![Actions Status](https://github.com/hkc452/patronum-pm2/workflows/Website/badge.svg)](https://github.com/hkc452/patronum-pm2/actions)
 
 >  patronum，来自 Harry Potter，寓意呼神护卫，咒语: EXPECTO PATRONUM
 
