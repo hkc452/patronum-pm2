@@ -1,0 +1,2 @@
+- Getting started
+  - [AMP Message](amp.md)
