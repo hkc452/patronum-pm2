@@ -111,3 +111,132 @@ module.exports = function(buf){
   return args;
 };
 ```
+但是在实际编码过程中，数据的传输都是通过流的信息传输，所以我们需要从流的数据中拿到我们编码后的数据~例如像下面这样，我们把客户端传过来的数据 pipe 过去给 parser 处理，拿出完整编码数据。
+```js 
+var server = net.createServer(function(sock){
+  var parser = new amp.Stream;
+  var n = 0;
+  
+  parser.on('data', function(msg){
+    assert('foo, bar baz' == msg.join(', '));
+    if (n++ % 1000 == 0) {
+      process.stdout.write('.');
+    }
+  });
+
+  sock.pipe(parser);
+});
+
+server.listen(3000);
+```
+So, 我们看看 amp 中的 Stream 怎么实现的。 Stream 继承可写流，同时自身维护 state 表示对 chunk 怎么处理，_lenbuf 表示协议中当前数据的长度~
+
+state 一共有三种状态，message 表示开始解析协议，我们从中拿出协议版本和多少条数据，arglen 表示拿出当前数据的长度，arg 表示解析当前数据。
+
+我们看看 _write 函数，一开始 state 的状态是 mesaage，取出协议版本号和数据条数，_nargs 表示取出多少条数据了，_leni 是对当前数据长度的计数，因为数据长度使用四个字节存储的，
+```js
+/**
+ * Module dependencies.
+ */
+
+var Stream = require('stream').Writable;
+var encode = require('./encode');
+
+/**
+ * Expose parser.
+ */
+
+module.exports = Parser;
+
+/**
+ * Initialize parser.
+ *
+ * @param {Options} [opts]
+ * @api public
+ */
+
+function Parser(opts) {
+  Stream.call(this, opts);
+  this.state = 'message';
+  this._lenbuf = Buffer.allocUnsafe(4);
+}
+
+/**
+ * Inherit from `Stream.prototype`.
+ */
+
+Parser.prototype.__proto__ = Stream.prototype;
+
+/**
+ * Write implementation.
+ */
+
+Parser.prototype._write = function(chunk, encoding, fn){
+  for (var i = 0; i < chunk.length; i++) {
+    switch (this.state) {
+      case 'message':
+        var meta = chunk[i];
+        this.version = meta >> 4;
+        this.argv = meta & 0xf;
+        this.state = 'arglen';
+        this._bufs = [Buffer.from([meta])];
+        this._nargs = 0;
+        this._leni = 0;
+        break;
+
+      case 'arglen':
+        this._lenbuf[this._leni++] = chunk[i];
+
+        // done
+        if (4 == this._leni) {
+          this._arglen = this._lenbuf.readUInt32BE(0);
+          var buf = Buffer.allocUnsafe(4);
+          buf[0] = this._lenbuf[0];
+          buf[1] = this._lenbuf[1];
+          buf[2] = this._lenbuf[2];
+          buf[3] = this._lenbuf[3];
+          this._bufs.push(buf);
+          this._argcur = 0;
+          this.state = 'arg';
+        }
+        break;
+
+      case 'arg':
+        // bytes remaining in the argument
+        var rem = this._arglen - this._argcur;
+
+        // consume the chunk we need to complete
+        // the argument, or the remainder of the
+        // chunk if it's not mixed-boundary
+        var pos = Math.min(rem + i, chunk.length);
+
+        // slice arg chunk
+        var part = chunk.slice(i, pos);
+        this._bufs.push(part);
+
+        // check if we have the complete arg
+        this._argcur += pos - i;
+        var done = this._argcur == this._arglen;
+        i = pos - 1;
+
+        if (done) this._nargs++;
+
+        // no more args
+        if (this._nargs == this.argv) {
+          this.state = 'message';
+          this.emit('data', Buffer.concat(this._bufs));
+          break;
+        }
+
+        if (done) {
+          this.state = 'arglen';
+          this._leni = 0;
+        }
+        break;
+    }
+  }
+
+
+  fn();
+};
+```
