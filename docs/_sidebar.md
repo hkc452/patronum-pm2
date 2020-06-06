@@ -1,2 +1,2 @@
-- Getting started
+- RPC
   - [AMP Message](amp.md)
