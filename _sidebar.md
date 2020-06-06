@@ -1,2 +1,3 @@
 - RPC
-  - [AMP Message](amp.md)
+  - [AMP](amp.md)
+  - [AMP-Message](amp-message.md)
