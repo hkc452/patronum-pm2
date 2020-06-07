@@ -10,7 +10,7 @@
 
 支持多种数据类型、速度足够快、轻量的协议、支持 Unix socket 协议、支持 amp-message、 支持多种数据类型混合等~
 
-axon 一共支持四种组类型的 socket，具体四对怎么使用，且听下回分解~ :溜)
+axon 一共支持四组类型的 socket，具体四对怎么使用，且听下回分解~ :溜)
 - push / pull
 - pub / sub
 - req / rep
