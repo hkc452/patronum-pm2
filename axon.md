@@ -70,7 +70,7 @@ exports.socket = function(type, options){
 
 继续往下看，可以看到 Socket 的原型的原型指向了 `Emitter.prototype`,也就是 Socket 支持事件监听~
 
-`Socket.prototype.use` 方法主要是用于插件调用，把当前实例出传进去，同时返回 this 表示支持链式调用。对于 axon 来说，主要支持两个插件，一个 enqueue，用于当发送数据的，要接收端没有在线，这是把消息缓存起来，另外一个 round-robin，round-robin 算法都知道是啥回事，在这里是服务器采用 round-robin 像接收端发送信息~
+`Socket.prototype.use` 方法主要是用于插件调用，把当前实例出传进去，同时返回 this 表示支持链式调用。对于 axon 来说，主要支持两个插件，一个 enqueue，用于当发送数据的，要接收端没有在线，这是把消息缓存起来，另外一个 round-robin，round-robin 算法都知道是啥回事，在这里是服务器采用 round-robin 向接收端发送信息~
 ``` js
 /**
  * Expose `Socket`.
