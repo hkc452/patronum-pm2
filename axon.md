@@ -62,3 +62,65 @@ exports.socket = function(type, options){
   return new fn(options);
 };
 ```
+接下来，让我们首先看看 [sock](https://github.com/Unitech/pm2-axon/blob/master/lib/sockets/sock.js) ，因为它是内置其他八种 socket 的基类。
+
+从 Socket 上面的构造函数注释我们可以看到， Socket 可以是 client 或者 server ，取决于我们用了 connect 还是 bind 方法~
+
+看看构造方法, this.opts 就是传入的可选参数， this.server 只有当前 socket 是服务器时才有值，this.socks 保存着我们链接上服务器的 socket 或者 服务器上链接的 socket，对于 this.setting ，需要提下 `Configurable(Socket.prototype)`, Configurable 为我们操作 setting 属性提供了方法，举个例子, `this.set('hwm', Infinity)`，这个就是讲 `setting.hwm` 赋值为 Infinity。而对于构造函数的四个 set 属性，可以看看 [Readme](https://github.com/Unitech/pm2-axon/blob/master/Readme.md)
+
+继续往下看，可以看到 Socket 的原型的原型指向了 `Emitter.prototype`,也就是 Socket 支持事件监听~
+
+`Socket.prototype.use` 方法主要是用于插件调用，把当前实例出传进去，同时返回 this 表示支持链式调用。对于 axon 来说，主要支持两个插件，一个 enqueue，用于当发送数据的，要接收端没有在线，这是把消息缓存起来，另外一个 round-robin，round-robin 算法都知道是啥回事，在这里是服务器采用 round-robin 像接收端发送信息~
+``` js
+/**
+ * Expose `Socket`.
+ */
+
+module.exports = Socket;
+
+/**
+ * Initialize a new `Socket`.
+ *
+ * A "Socket" encapsulates the ability of being
+ * the "client" or the "server" depending on
+ * whether `connect()` or `bind()` was called.
+ *
+ * @api private
+ */
+
+function Socket() {
+  var self = this;
+  this.opts = {};
+  this.server = null;
+  this.socks = [];
+  this.settings = {};
+  this.set('hwm', Infinity);
+  this.set('identity', String(process.pid));
+  this.set('retry timeout', 100);
+  this.set('retry max timeout', 5000);
+}
+
+/**
+ * Inherit from `Emitter.prototype`.
+ */
+
+Socket.prototype.__proto__ = Emitter.prototype;
+
+/**
+ * Make it configurable `.set()` etc.
+ */
+
+Configurable(Socket.prototype);
+
+/**
+ * Use the given `plugin`.
+ *
+ * @param {Function} plugin
+ * @api private
+ */
+
+Socket.prototype.use = function(plugin){
+  plugin(this);
+  return this;
+};
+```
