@@ -604,7 +604,7 @@ module.exports = function(options){
 ```
 
 #### Round-robin
-主要是采用 Round-robin 算法，将消息发送给客户端，什么是 Round-robin，说白了，就是轮询~当服务端要向客户端发送消息的时候，轮询从 socks 取出一个 sock ，如果这时 sock 可以发送消息，则调用 write 方法将 pack  后消息发送给客户端，否则调用 fallback 方法,例如在 Push 中的 fallback 就是 调用 enquue 方法，即将小心缓存起来。
+主要是采用 Round-robin 算法，将消息发送给客户端，什么是 Round-robin，说白了，就是轮询~当服务端要向客户端发送消息的时候，轮询从 socks 取出一个 sock ，如果这时 sock 可以发送消息，则调用 write 方法将 pack  后消息发送给客户端，否则调用 fallback 方法,例如在 Push 中的 fallback 就是 调用 enquue 方法，即将消息缓存起来。
 ```js
 /**
  * Deps.
@@ -738,5 +738,56 @@ PullSocket.prototype.__proto__ = Socket.prototype;
 
 PullSocket.prototype.send = function(){
   throw new Error('pull sockets should not send messages');
+};
+```
+
+#### Pub / Sub
+Pub 会把消息发送给全部的客户端并且不会缓存起来，跟Push 最大的区别是，Push会把消息缓存起来当客户端离线的时候等到下次连接再一次性发送完消息，同时是轮询挑选一个客户端发送消息。
+
+可以看到 Pub 自己实现 send 方法，而不是使用 round-ronbin 中的 send 方法。在 send 方法中，首先取出所有的 socks，然后将消息打包 pack，最后循环将消息发送给所有的客户端。
+```js
+
+/**
+ * Expose `PubSocket`.
+ */
+
+module.exports = PubSocket;
+
+/**
+ * Initialize a new `PubSocket`.
+ *
+ * @api private
+ */
+
+function PubSocket() {
+  Socket.call(this);
+}
+
+/**
+ * Inherits from `Socket.prototype`.
+ */
+
+PubSocket.prototype.__proto__ = Socket.prototype;
+
+/**
+ * Send `msg` to all established peers.
+ *
+ * @param {Mixed} msg
+ * @api public
+ */
+
+PubSocket.prototype.send = function(msg){
+  var socks = this.socks;
+  var len = socks.length;
+  var sock;
+
+  var buf = this.pack(arguments);
+
+  for (var i = 0; i < len; i++) {
+    sock = socks[i];
+    if (sock.writable) sock.write(buf);
+  }
+
+  return this;
 };
 ```
