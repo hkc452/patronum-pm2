@@ -520,3 +520,85 @@ Socket.prototype.onconnect = function(sock){
   });
 };
 ```
+
+### 插件
+我们说过， Socket 一共两个插件，enqueue 和 round-robin, 接下来让我们逐一击破
+
+#### enqueue
+enqueue 主要讲消息缓存起来，等下次 socket 连接的时候，让离线存储的信息发给客户端。
+
+这里的 sock 表示 Socket 实例，首先将离线消息缓存在 queue 数组，但消息的缓存有个峰值 `sock.settings.hwm`, 我们看看 enqueue 方法，对于无法缓存的消息，直接丢弃，调用 drop 方法，里面会触发 drop 监听方法。
+
+上面讲服务器 bind 的时候，我们知道服务器 onconnect 方法会触发 connect 方法，这是我们会看看 sock 上面有没有缓存的离线信息，如果有，我们循环 send 给客户端，最后触发 flush 监听。
+```js
+/**
+ * Module dependencies.
+ */
+
+var debug = require('debug')('axon:queue');
+
+/**
+ * Queue plugin.
+ *
+ * Provides an `.enqueue()` method to the `sock`. Messages
+ * passed to `enqueue` will be buffered until the next
+ * `connect` event is emitted.
+ *
+ * Emits:
+ *
+ *  - `drop` (msg) when a message is dropped
+ *  - `flush` (msgs) when the queue is flushed
+ *
+ * @param {Object} options
+ * @api private
+ */
+
+module.exports = function(options){
+  options = options || {};
+
+  return function(sock){
+
+    /**
+     * Message buffer.
+     */
+
+    sock.queue = [];
+
+    /**
+     * Flush `buf` on `connect`.
+     */
+
+    sock.on('connect', function(){
+      var prev = sock.queue;
+      var len = prev.length;
+      sock.queue = [];
+      debug('flush %d messages', len);
+
+      for (var i = 0; i < len; ++i) {
+        this.send.apply(this, prev[i]);
+      }
+
+      sock.emit('flush', prev);
+    });
+
+    /**
+     * Pushes `msg` into `buf`.
+     */
+
+    sock.enqueue = function(msg){
+      var hwm = sock.settings.hwm;
+      if (sock.queue.length >= hwm) return drop(msg);
+      sock.queue.push(msg);
+    };
+
+    /**
+     * Drop the given `msg`.
+     */
+
+    function drop(msg) {
+      debug('drop');
+      sock.emit('drop', msg);
+    }
+  };
+};
+```
