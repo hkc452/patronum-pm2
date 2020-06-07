@@ -491,7 +491,7 @@ Socket.prototype.bind = function(port, host, fn){
   return this;
 };
 ```
-onconnect 主要是将 sock 加入 socks ，同时触发 connect 监听，处理 sock 出现的 error，同时监听到sock 上面的 close 事件时，触发 socket 的 disconnect 监听和讲 sock 移除出 socks。
+onconnect 主要是将 sock 加入 socks ，同时触发 connect 监听，处理 sock 出现的 error，同时监听到sock 上面的 close 事件时，触发 socket 的 disconnect 监听和将 sock 移除出 socks。
 ```js
 /**
  * Handle connection.
