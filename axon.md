@@ -602,3 +602,62 @@ module.exports = function(options){
   };
 };
 ```
+
+#### Round-robin
+主要是采用 Round-robin 算法，将消息发送给客户端，什么是 Round-robin，说白了，就是轮询~当服务端要向客户端发送消息的时候，轮询从 socks 取出一个 sock ，如果这时 sock 可以发送消息，则调用 write 方法将 pack  后消息发送给客户端，否则调用 fallback 方法
+```js
+/**
+ * Deps.
+ */
+
+var slice = require('../utils').slice;
+
+/**
+ * Round-robin plugin.
+ *
+ * Provides a `send` method which will
+ * write the `msg` to all connected peers.
+ *
+ * @param {Object} options
+ * @api private
+ */
+
+module.exports = function(options){
+  options = options || {};
+  var fallback = options.fallback || function(){};
+
+  return function(sock){
+
+    /**
+     * Bind callback to `sock`.
+     */
+
+    fallback = fallback.bind(sock);
+
+    /**
+     * Initialize counter.
+     */
+
+    var n = 0;
+
+    /**
+     * Sends `msg` to all connected peers round-robin.
+     */
+
+    sock.send = function(){
+      var socks = this.socks;
+      var len = socks.length;
+      var sock = socks[n++ % len];
+
+      var msg = slice(arguments);
+
+      if (sock && sock.writable) {
+        sock.write(this.pack(msg));
+      } else {
+        fallback(msg);
+      }
+    };
+
+  };
+};
+```
