@@ -124,3 +124,183 @@ Socket.prototype.use = function(plugin){
   return this;
 };
 ```
+pack 方法调用 amp-message 去打包数据，最后返回 msg.toBuffer()，还记得Message 内部在内部调用 amp.encode 之前，会调用自己的 pack 方法对数据加标识
+```js
+/**
+ * Creates a new `Message` and write the `args`.
+ *
+ * @param {Array} args
+ * @return {Buffer}
+ * @api private
+ */
+
+Socket.prototype.pack = function(args){
+  var msg = new Message(args);
+  return msg.toBuffer();
+};
+```
+closeSockets 看注释就知道干嘛的，关闭 this.socks 上面所有的 socket，调用  sock.destroy 方法，主要 this.socks 上面的 socket 都是原生的 socket，而不是这个 Socket 对象的实例。
+
+再来看看 close 方法，首先讲 closing 状态置为 true，然后调用 closeSockets 关闭 socket，对于服务器，还要调用 closeServer 关闭服务器。
+
+我们来看看 closeServer，close 会传入 fn 回调进去 closeServer, closeServer 内部 this.server 首先把 close 回调与 socket 上面的close 监听方法绑定在一起，然后显式调用 server.close,最后触发我们传入的回调 fn。
+```js
+/**
+ * Close all open underlying sockets.
+ *
+ * @api private
+ */
+
+Socket.prototype.closeSockets = function(){
+  debug('closing %d connections', this.socks.length);
+  this.socks.forEach(function(sock){
+    sock.destroy();
+  });
+};
+
+/**
+ * Close the socket.
+ *
+ * Delegates to the server or clients
+ * based on the socket `type`.
+ *
+ * @param {Function} [fn]
+ * @api public
+ */
+
+Socket.prototype.close = function(fn){
+  debug('closing');
+  this.closing = true;
+  this.closeSockets();
+  if (this.server) this.closeServer(fn);
+};
+
+/**
+ * Close the server.
+ *
+ * @param {Function} [fn]
+ * @api public
+ */
+
+Socket.prototype.closeServer = function(fn){
+  debug('closing server');
+  this.server.on('close', this.emit.bind(this, 'close'));
+  this.server.close();
+  fn && fn();
+};
+```
+
+address 用于获取服务器的地址，如果不是服务器就直接返回，默认是 tcp 协议，当然我们前面说了也支持 unix 协议~
+```js
+/**
+ * Return the server address.
+ *
+ * @return {Object}
+ * @api public
+ */
+
+Socket.prototype.address = function(){
+  if (!this.server) return;
+  var addr = this.server.address();
+  addr.string = 'tcp://' + addr.address + ':' + addr.port;
+  return addr;
+};
+```
+
+removeSocket、addSocket 就是讲连接上的 socket 存到一个数组里面，对于客户端来说，就是 connect 中回调函数中的 socket，对于服务端，就是 onconnect 回到参数中的 socket。对于 addSocket 我们需要注意的是，因为我们采用的是 amp 协议，所以需要从流中取出完整的 amp 数据，需要借助 amp.Stream，最后 parser 触发 data 事件时，会触发 onMessage 事件。
+```js
+/**
+ * Remove `sock`.
+ *
+ * @param {Socket} sock
+ * @api private
+ */
+
+Socket.prototype.removeSocket = function(sock){
+  var i = this.socks.indexOf(sock);
+  if (!~i) return;
+  debug('remove socket %d', i);
+  this.socks.splice(i, 1);
+};
+
+/**
+ * Add `sock`.
+ *
+ * @param {Socket} sock
+ * @api private
+ */
+
+Socket.prototype.addSocket = function(sock){
+  var parser = new Parser;
+  var i = this.socks.push(sock) - 1;
+  debug('add socket %d', i);
+  sock.pipe(parser);
+  parser.on('data', this.onmessage(sock));
+};
+```
+趁热打铁，我们来看看 onmessage 事件，需要注意的是，我们八种类型的socket，有些会根据自己的需求，覆盖内置的 onmessage。
+
+我们知道 Message 初始化的时候，如果传参是 buffer，会将 buffer 解码，然后将解码后的数据和原生 socket 传给 socket 实例上面的 message 监听函数~
+```js
+/**
+ * Handles framed messages emitted from the parser, by
+ * default it will go ahead and emit the "message" events on
+ * the socket. However, if the "higher level" socket needs
+ * to hook into the messages before they are emitted, it
+ * should override this method and take care of everything
+ * it self, including emitted the "message" event.
+ *
+ * @param {net.Socket} sock
+ * @return {Function} closure(msg, mulitpart)
+ * @api private
+ */
+
+Socket.prototype.onmessage = function(sock){
+  var self = this;
+  return function(buf){
+    var msg = new Message(buf);
+    self.emit.apply(self, ['message'].concat(msg.args), sock);
+  };
+};
+```
+handleErrors 就是用于处理错误的，对于发生错误的 原生sokcet，首先触发 socket error 监听，同时将发生错误的 socket 移除出去，再看看发生的错误是否在忽略错误列表，如果不在，触发 error 监听，否则触发 ignored error 监听。
+```js
+/**
+ * Errors to ignore.
+ */
+
+var ignore = [
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENETDOWN',
+  'EPIPE',
+  'ENOENT'
+];
+/**
+ * Handle `sock` errors.
+ *
+ * Emits:
+ *
+ *  - `error` (err) when the error is not ignored
+ *  - `ignored error` (err) when the error is ignored
+ *  - `socket error` (err) regardless of ignoring
+ *
+ * @param {Socket} sock
+ * @api private
+ */
+
+Socket.prototype.handleErrors = function(sock){
+  var self = this;
+  sock.on('error', function(err){
+    debug('error %s', err.code || err.message);
+    self.emit('socket error', err);
+    self.removeSocket(sock);
+    if (!~ignore.indexOf(err.code)) return self.emit('error', err);
+    debug('ignored %s', err.code);
+    self.emit('ignored error', err);
+  });
+};
+```
