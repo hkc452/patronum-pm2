@@ -207,7 +207,7 @@ Socket.prototype.address = function(){
 };
 ```
 
-removeSocket、addSocket 就是讲连接上的 socket 存到一个数组里面，对于客户端来说，就是 connect 中回调函数中的 socket，对于服务端，就是 onconnect 回到参数中的 socket。对于 addSocket 我们需要注意的是，因为我们采用的是 amp 协议，所以需要从流中取出完整的 amp 数据，需要借助 amp.Stream，最后 parser 触发 data 事件时，会触发 onMessage 事件。
+removeSocket、addSocket 就是讲连接上的 socket 存到一个数组里面，对于客户端来说，就是 connect 中回调函数中的 socket，对于服务端，就是 onconnect 回到参数中的 socket。对于 addSocket 我们需要注意的是，因为我们采用的是 amp 协议，所以需要从流中取出完整的 amp 数据，需要借助 amp.Stream，最后 parser 触发 data 事件时，会触发 onmessage 方法。
 ```js
 /**
  * Remove `sock`.
@@ -238,9 +238,9 @@ Socket.prototype.addSocket = function(sock){
   parser.on('data', this.onmessage(sock));
 };
 ```
-趁热打铁，我们来看看 onmessage 事件，需要注意的是，我们八种类型的socket，有些会根据自己的需求，覆盖内置的 onmessage。
+趁热打铁，我们来看看 onmessage 方法，需要注意的是，我们八种类型的socket，有些会根据自己的需求，覆盖内置的 onmessage。
 
-我们知道 Message 初始化的时候，如果传参是 buffer，会将 buffer 解码，然后将解码后的数据和原生 socket 传给 socket 实例上面的 message 监听函数~
+上面 addSocket 方法中，将流的数据经过 parser 处理， onmessage 被触发时，buf 参数就是 encode 过的 amp 消息，同时我们知道 Message 初始化的时候，如果传参是 buffer，会将 buffer 解码，这样我们就拿到了解码后的数据，最后将解码后的数据和原生 sock 传给 Socket 实例上面的 message 监听函数~
 ```js
 /**
  * Handles framed messages emitted from the parser, by
@@ -604,7 +604,7 @@ module.exports = function(options){
 ```
 
 #### Round-robin
-主要是采用 Round-robin 算法，将消息发送给客户端，什么是 Round-robin，说白了，就是轮询~当服务端要向客户端发送消息的时候，轮询从 socks 取出一个 sock ，如果这时 sock 可以发送消息，则调用 write 方法将 pack  后消息发送给客户端，否则调用 fallback 方法
+主要是采用 Round-robin 算法，将消息发送给客户端，什么是 Round-robin，说白了，就是轮询~当服务端要向客户端发送消息的时候，轮询从 socks 取出一个 sock ，如果这时 sock 可以发送消息，则调用 write 方法将 pack  后消息发送给客户端，否则调用 fallback 方法,例如在 Push 中的 fallback 就是 调用 enquue 方法，即将小心缓存起来。
 ```js
 /**
  * Deps.
@@ -659,5 +659,84 @@ module.exports = function(options){
     };
 
   };
+};
+```
+
+### 四组 Socket 
+
+#### Push / Pull
+
+我们先看看 Push，继承 Socket，前面两个插件都使用了，注意 roundrobin 的 fallback 是 enqueue，即客户端不在线时，将消息缓存，同时 Push 是轮询客户端发送消息，调用 roundrobin 的 send 方法去发送消息。
+
+```js
+/**
+ * Module dependencies.
+ */
+
+var roundrobin = require('../plugins/round-robin');
+var queue = require('../plugins/queue');
+var Socket = require('./sock');
+
+/**
+ * Expose `PushSocket`.
+ */
+
+module.exports = PushSocket;
+
+/**
+ * Initialize a new `PushSocket`.
+ *
+ * @api private
+ */
+
+function PushSocket() {
+  Socket.call(this);
+  this.use(queue());
+  this.use(roundrobin({ fallback: this.enqueue }));
+}
+
+/**
+ * Inherits from `Socket.prototype`.
+ */
+
+PushSocket.prototype.__proto__ = Socket.prototype;
+```
+pull 中，基本也是继承 Socket，但无法调用 send 方法发送消息，调用 send 会抛出错误~
+```js
+/**
+ * Module dependencies.
+ */
+
+var Socket = require('./sock');
+
+/**
+ * Expose `PullSocket`.
+ */
+
+module.exports = PullSocket;
+
+/**
+ * Initialize a new `PullSocket`.
+ *
+ * @api private
+ */
+
+function PullSocket() {
+  Socket.call(this);
+  // TODO: selective reception
+}
+
+/**
+ * Inherits from `Socket.prototype`.
+ */
+
+PullSocket.prototype.__proto__ = Socket.prototype;
+
+/**
+ * Pull sockets should not send messages.
+ */
+
+PullSocket.prototype.send = function(){
+  throw new Error('pull sockets should not send messages');
 };
 ```
