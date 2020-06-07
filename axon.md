@@ -304,3 +304,219 @@ Socket.prototype.handleErrors = function(sock){
   });
 };
 ```
+接下来，我们看看 connect 方法，这个就是当 Socket 成为客户端时，需要连接服务端的方法~
+
+connect 首先会进行一系列的参数校验，但是如果我们采用 bind 方法过，type 会被置为 server ，这是我们不能再调用 connect 方法了。如果 port 是 字符串，会调用 url.parse, 尝试解析出 post 和 port。
+
+sock.setNoDelay() 表示禁用 Nagle 的 socket 算法，因为我们希望数据延迟。
+
+对于 sock 的 close 监听，这时 connected 为false，除了我们主动调用上面的 socket.close 方法关闭的，这是会触发 close 监听，否则会尝试进行重连。
+
+对于 sock 的  conncet 监听，如果连接成功，这时 connected 为 true，同时将 sock 加入 this.socks, 触发 socket 上面的 conncet 监听。
+
+`sock.connect(port, host); ` 就是主动发起连接~
+
+最后返回 this ，方便链式调用。
+
+```js
+/**
+ * Connect to `port` at `host` and invoke `fn()`.
+ *
+ * Defaults `host` to localhost.
+ *
+ * TODO: needs big cleanup
+ *
+ * @param {Number|String} port
+ * @param {String} host
+ * @param {Function} fn
+ * @return {Socket}
+ * @api public
+ */
+
+Socket.prototype.connect = function(port, host, fn){
+  var self = this;
+  if ('server' == this.type) throw new Error('cannot connect() after bind()');
+  if ('function' == typeof host) fn = host, host = undefined;
+
+  if ('string' == typeof port) {
+    port = url.parse(port);
+
+    if (port.pathname) {
+      fn = host;
+      host = null;
+      fn = undefined;
+      port = port.pathname;
+    } else {
+      host = port.hostname || '0.0.0.0';
+      port = parseInt(port.port, 10);
+    }
+  } else {
+    host = host || '0.0.0.0';
+  }
+
+  var max = self.get('retry max timeout');
+  var sock = new net.Socket;
+  sock.setNoDelay();
+  this.type = 'client';
+  port = port;
+
+  this.handleErrors(sock);
+
+  sock.on('close', function(){
+    self.connected = false;
+    self.removeSocket(sock);
+    if (self.closing) return self.emit('close');
+    var retry = self.retry || self.get('retry timeout');
+    if (retry === 0) return self.emit('close');
+    setTimeout(function(){
+      debug('attempting reconnect');
+      self.emit('reconnect attempt');
+      sock.destroy();
+      self.connect(port, host);
+      self.retry = Math.round(Math.min(max, retry * 1.5));
+    }, retry);
+  });
+
+  sock.on('connect', function(){
+    debug('connect');
+    self.connected = true;
+    self.addSocket(sock);
+    self.retry = self.get('retry timeout');
+    self.emit('connect');
+    fn && fn();
+  });
+
+  debug('connect attempt %s:%s', host, port);
+  sock.connect(port, host);
+  return this;
+};
+```
+bind 方法就是让 Socket 成为服务器，同理，如果调用过 conncet 方法，则不能再次调用 bind 方法，不然 最明显的就是 this.socks 里面的 sock 都混了~
+
+解析我们解析 port，需要主要的是注意 unix socket 文件，我们需要特别做个标记，unixSocket 为 true，这在后面会用到，对于 unix socket， `unix:///some/path` 的 port 就是 `/some/path`。
+
+接着我们将 type 设置为 server，通过尝试 `net.createServer(this.onconnect.bind(this))` 建立服务器，并赋值给 server，需要注意的是，this.onconnect 方法，这个我们会接下来讲解。
+
+`this.server.listen(port, host, fn)` 开始建立服务器监听，正式起服务器。
+
+这里需要再提下 unixSocket，以为我们需要对 socket 文件监听错误时进行一个重试机制的处理。如果出现 EADDRINUSE 错误，我们会尝试建立客户端链接上去，如果链接成功了，说明已经确实有进程在用。否则删除 socket 文件，重试建立服务器监听。对于 unixSocket 的其他错误，直接删除 socket 文件，重新监听服务器监听。
+```js
+/**
+ * Bind to `port` at `host` and invoke `fn()`.
+ *
+ * Defaults `host` to INADDR_ANY.
+ *
+ * Emits:
+ *
+ *  - `connection` when a client connects
+ *  - `disconnect` when a client disconnects
+ *  - `bind` when bound and listening
+ *
+ * @param {Number|String} port
+ * @param {Function} fn
+ * @return {Socket}
+ * @api public
+ */
+
+Socket.prototype.bind = function(port, host, fn){
+  var self = this;
+  if ('client' == this.type) throw new Error('cannot bind() after connect()');
+  if ('function' == typeof host) fn = host, host = undefined;
+
+  var unixSocket = false;
+
+  if ('string' == typeof port) {
+    port = url.parse(port);
+
+    if (port.pathname) {
+      fn = host;
+      host = null;
+      port = port.pathname;
+      unixSocket = true;
+    } else {
+      host = port.hostname || '0.0.0.0';
+      port = parseInt(port.port, 10);
+    }
+  } else {
+    host = host || '0.0.0.0';
+  }
+
+  this.type = 'server';
+
+  this.server = net.createServer(this.onconnect.bind(this));
+
+  debug('bind %s:%s', host, port);
+  this.server.on('listening', this.emit.bind(this, 'bind'));
+
+  if (unixSocket) {
+    // TODO: move out
+    this.server.on('error', function(e) {
+      debug('Got error while trying to bind', e.stack || e);
+      if (e.code == 'EADDRINUSE') {
+        // Unix file socket and error EADDRINUSE is the case if
+        // the file socket exists. We check if other processes
+        // listen on file socket, otherwise it is a stale socket
+        // that we could reopen
+        // We try to connect to socket via plain network socket
+        var clientSocket = new net.Socket();
+
+        clientSocket.on('error', function(e2) {
+          debug('Got sub-error', e2);
+          if (e2.code == 'ECONNREFUSED' || e2.code == 'ENOENT') {
+            // No other server listening, so we can delete stale
+            // socket file and reopen server socket
+            try {
+              fs.unlinkSync(port);
+            } catch(e) {}
+            self.server.listen(port, host, fn);
+          }
+        });
+
+        clientSocket.connect({path: port}, function() {
+          // Connection is possible, so other server is listening
+          // on this file socket
+          if (fn) return fn(new Error('Process already listening on socket ' + port));
+        });
+      }
+      else {
+        try {
+          fs.unlinkSync(port);
+        } catch(e) {}
+        self.server.listen(port, host, fn);
+      }
+    });
+  }
+
+  this.server.listen(port, host, fn);
+  return this;
+};
+```
+onconnect 主要是将 sock 加入 socks ，同时触发 connect 监听，处理 sock 出现的 error，同时监听到sock 上面的 close 事件时，触发 socket 的 disconnect 监听和讲 sock 移除出 socks。
+```js
+/**
+ * Handle connection.
+ *
+ * @param {Socket} sock
+ * @api private
+ */
+
+Socket.prototype.onconnect = function(sock){
+  var self = this;
+  var addr = null;
+
+  if (sock.remoteAddress && sock.remotePort)
+    addr = sock.remoteAddress + ':' + sock.remotePort;
+  else if (sock.server && sock.server._pipeName)
+    addr = sock.server._pipeName;
+
+  debug('accept %s', addr);
+  this.addSocket(sock);
+  this.handleErrors(sock);
+  this.emit('connect', sock);
+  sock.on('close', function(){
+    debug('disconnect %s', addr);
+    self.emit('disconnect', sock);
+    self.removeSocket(sock);
+  });
+};
+```
