@@ -1105,3 +1105,122 @@ RepSocket.prototype.onmessage = function(sock){
 ```
 
 #### PubEmitter / SubEmitter
+这组 Socket 其实是对 Pub / Sub 组的封装，只不过 API 调用更像 EventEmitter。
+
+可以看到 PubEmitter 内部初始化一个 PubSocket，但是把 send 方法包装一层，变成 emit 方法。
+```js
+/**
+ * Module dependencies.
+ */
+
+var PubSocket = require('./pub');
+
+/**
+ * Expose `SubPubEmitterSocket`.
+ */
+
+module.exports = PubEmitterSocket;
+
+/**
+ * Initialzie a new `PubEmitterSocket`.
+ *
+ * @api private
+ */
+
+function PubEmitterSocket() {
+  this.sock = new PubSocket;
+  this.emit = this.sock.send.bind(this.sock);
+  this.bind = this.sock.bind.bind(this.sock);
+  this.connect = this.sock.connect.bind(this.sock);
+  this.close = this.sock.close.bind(this.sock);
+}
+```
+SubEmitterSocket 也是对 SubSocket 的封装，只不过支持单独消息主题订阅，或者说是 listeners。on 方法相当于对 subscribe 的包装，只不过因为支持单独事件回调，所以需要维护 listeners。off 是对 unsubscribe 的封装，同时将回调从 listeners 剔除。
+
+最后我们我们看看重点 onmessage 方法，listener.re 检验回调函数，需要注意的是，消息主题中 `*` 会被正则取出，当做消息的 action 放到 msg.args 最前面，传给 listener.fn。
+```js
+/**
+ * Expose `SubEmitterSocket`.
+ */
+
+module.exports = SubEmitterSocket;
+
+/**
+ * Initialzie a new `SubEmitterSocket`.
+ *
+ * @api private
+ */
+
+function SubEmitterSocket() {
+  this.sock = new SubSocket;
+  this.sock.onmessage = this.onmessage.bind(this);
+  this.bind = this.sock.bind.bind(this.sock);
+  this.connect = this.sock.connect.bind(this.sock);
+  this.close = this.sock.close.bind(this.sock);
+  this.listeners = [];
+}
+
+/**
+ * Message handler.
+ *
+ * @param {net.Socket} sock
+ * @return {Function} closure(msg, mulitpart)
+ * @api private
+ */
+
+SubEmitterSocket.prototype.onmessage = function(){
+  var listeners = this.listeners;
+  var self = this;
+
+  return function(buf){
+    var msg = new Message(buf);
+    var topic = msg.shift();
+
+    for (var i = 0; i < listeners.length; ++i) {
+      var listener = listeners[i];
+
+      var m = listener.re.exec(topic);
+      if (!m) continue;
+
+      listener.fn.apply(this, m.slice(1).concat(msg.args));
+    }
+  }
+};
+
+/**
+ * Subscribe to `event` and invoke the given callback `fn`.
+ *
+ * @param {String} event
+ * @param {Function} fn
+ * @return {SubEmitterSocket} self
+ * @api public
+ */
+
+SubEmitterSocket.prototype.on = function(event, fn){
+  var re = this.sock.subscribe(event);
+  this.listeners.push({
+    event: event,
+    re: re,
+    fn: fn
+  });
+  return this;
+};
+
+/**
+ * Unsubscribe with the given `event`.
+ *
+ * @param {String} event
+ * @return {SubEmitterSocket} self
+ * @api public
+ */
+
+SubEmitterSocket.prototype.off = function(event){
+  for (var i = 0; i < this.listeners.length; ++i) {
+    if (this.listeners[i].event === event) {
+      this.sock.unsubscribe(this.listeners[i].re);
+      this.listeners.splice(i--, 1);
+    }
+  }
+  return this;
+};
+```
