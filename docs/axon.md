@@ -782,7 +782,7 @@ PubSocket.prototype.send = function(msg){
   var sock;
 
   var buf = this.pack(arguments);
-
+*
   for (var i = 0; i < len; i++) {
     sock = socks[i];
     if (sock.writable) sock.write(buf);
@@ -790,4 +790,151 @@ PubSocket.prototype.send = function(msg){
 
   return this;
 };
+```
+Sub 除了简单的接受信息以外，还支持对消息主题进行订阅，对于不符合主题的消息，不会触发 Sub 上面的 message 监听。
+
+首先看看构造函数，除了继承 Socket 外，还维护消息主题数组。再看看 onmessage，收到消息时，首先查看有没有主题订阅 `hasSubscriptions`, 如果有，从 message 中拿到解码后的数据的第一条数据，看看是否符合消息主题，如果不符合，直接返回。对于符合主题的消息或者没有对消息主题订阅，则触发 message 监听。
+
+Sub 怎么去订阅主题呢？通过 subscribe 方法，将字符串或者正则转化为消息主题的正则，同时塞到 subscriptions 数组里面，对于字符串转正则，这里主要是将 `*` 转化成 `(.+)`，即一次或以上匹配。对于消息是否符合主题，则循环 subscriptions 去调用正则的 test 看是否为 true。
+
+需要注意的是，Sub 也不支持 send 方法
+```js
+/**
+ * Expose `SubSocket`.
+ */
+
+module.exports = SubSocket;
+
+/**
+ * Initialize a new `SubSocket`.
+ *
+ * @api private
+ */
+
+function SubSocket() {
+  Socket.call(this);
+  this.subscriptions = [];
+}
+
+/**
+ * Inherits from `Socket.prototype`.
+ */
+
+SubSocket.prototype.__proto__ = Socket.prototype;
+
+/**
+ * Check if this socket has subscriptions.
+ *
+ * @return {Boolean}
+ * @api public
+ */
+
+SubSocket.prototype.hasSubscriptions = function(){
+  return !! this.subscriptions.length;
+};
+
+/**
+ * Check if any subscriptions match `topic`.
+ *
+ * @param {String} topic
+ * @return {Boolean}
+ * @api public
+ */
+
+SubSocket.prototype.matches = function(topic){
+  for (var i = 0; i < this.subscriptions.length; ++i) {
+    if (this.subscriptions[i].test(topic)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+/**
+ * Message handler.
+ *
+ * @param {net.Socket} sock
+ * @return {Function} closure(msg, mulitpart)
+ * @api private
+ */
+
+SubSocket.prototype.onmessage = function(sock){
+  var subs = this.hasSubscriptions();
+  var self = this;
+
+  return function(buf){
+    var msg = new Message(buf);
+
+    if (subs) {
+      var topic = msg.args[0];
+      if (!self.matches(topic)) return debug('not subscribed to "%s"', topic);
+    }
+
+    self.emit.apply(self, ['message'].concat(msg.args).concat(sock));
+  };
+};
+
+/**
+ * Subscribe with the given `re`.
+ *
+ * @param {RegExp|String} re
+ * @return {RegExp}
+ * @api public
+ */
+
+SubSocket.prototype.subscribe = function(re){
+  debug('subscribe to "%s"', re);
+  this.subscriptions.push(re = toRegExp(re));
+  return re;
+};
+
+/**
+ * Unsubscribe with the given `re`.
+ *
+ * @param {RegExp|String} re
+ * @api public
+ */
+
+SubSocket.prototype.unsubscribe = function(re){
+  debug('unsubscribe from "%s"', re);
+  re = toRegExp(re);
+  for (var i = 0; i < this.subscriptions.length; ++i) {
+    if (this.subscriptions[i].toString() === re.toString()) {
+      this.subscriptions.splice(i--, 1);
+    }
+  }
+};
+
+/**
+ * Clear current subscriptions.
+ *
+ * @api public
+ */
+
+SubSocket.prototype.clearSubscriptions = function(){
+  this.subscriptions = [];
+};
+
+/**
+ * Subscribers should not send messages.
+ */
+
+SubSocket.prototype.send = function(){
+  throw new Error('subscribers cannot send messages');
+};
+
+/**
+ * Convert `str` to a `RegExp`.
+ *
+ * @param {String} str
+ * @return {RegExp}
+ * @api private
+ */
+
+function toRegExp(str) {
+  if (str instanceof RegExp) return str;
+  str = escape(str);
+  str = str.replace(/\\\*/g, '(.+)');
+  return new RegExp('^' + str + '$');
+}
 ```
