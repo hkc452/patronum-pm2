@@ -1037,6 +1037,71 @@ ReqSocket.prototype.send = function(msg){
 };
 ```
 
+现在来看看 Rep 怎么去回复 Req 的信息的，直接看 onmessage 方法，解码信息之后，对信息做三个操作，第一取出服务端的回调 id，第二往前面塞 `message`，用于触发回调，最后给参数最后面添加添加客户端回复服务器的方法 reply，当 reply 被调用时，我们要看看 reply 最后一位是不是方法，用于我们发送给服务端完毕后触发的回调，还有一个很重要的操作，就是往 reply 参数的最后添加服务器回调的id。准备发送数据时，如果服务端可以发送小心，打包消息发送过去，同时触发客户端回调，参数为 true，否则在 nextTick 触发客户端回调，参数为 false。
+```js
+/**
+ * Expose `RepSocket`.
+ */
 
+module.exports = RepSocket;
+
+/**
+ * Initialize a new `RepSocket`.
+ *
+ * @api private
+ */
+
+function RepSocket() {
+  Socket.call(this);
+}
+
+/**
+ * Inherits from `Socket.prototype`.
+ */
+
+RepSocket.prototype.__proto__ = Socket.prototype;
+
+/**
+ * Incoming.
+ *
+ * @param {net.Socket} sock
+ * @return {Function} closure(msg, mulitpart)
+ * @api private
+ */
+
+RepSocket.prototype.onmessage = function(sock){
+  var self = this;
+
+  return function (buf){
+    var msg = new Message(buf);
+    var args = msg.args;
+
+    var id = args.pop();
+    args.unshift('message');
+    args.push(reply);
+    self.emit.apply(self, args);
+
+    function reply() {
+      var fn = function(){};
+      var args = slice(arguments);
+      args[0] = args[0] || null;
+
+      var hasCallback = 'function' == typeof args[args.length - 1];
+      if (hasCallback) fn = args.pop();
+
+      args.push(id);
+
+      if (sock.writable) {
+        sock.write(self.pack(args), function(){ fn(true) });
+        return true;
+      } else {
+        debug('peer went away');
+        process.nextTick(function(){ fn(false) });
+        return false;
+      }
+    }
+  };
+};
+```
 
 #### PubEmitter / SubEmitter
