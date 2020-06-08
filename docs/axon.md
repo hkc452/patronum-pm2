@@ -940,5 +940,103 @@ function toRegExp(str) {
 ```
 
 #### Req / Rep
+Req 跟 Push 一样，也是采用 round-robin 算法，轮询回复客户端，但是它提供了一个回调方法，让 Rep 回复信息时，触发这个回调函数
+
+
+Req 并没有直接采用 round-robin 插件，而是自己实现一次 round-robin，同时对于客户端不在线的情况，采用了 enqueue 去存储离线信息。构造函数，n 用来计数轮询， ids 用于生成回调方法的 id，claabacks 以键值储存回调方法。
+
+我们看看 send 方法，首先轮询取出要发送信息的 sock，同时取出信息的最后一位，保证最后一位是方法类型，生成唯一方法 id，同时方法通过 id 存储在 callbacks 上面，最后把方法的 id 放到信息的最后一位发送给客户端。
+
+那么当 Req 收到信息时 onmessage ，我们先解码信息，看看解码信息的最后一位方法 id 是否存在对于的回调方法，如果没有，直接返回，否则调用回调方法，最后从 callbacks 删除回调方法，这个过程有点像 jsBridge。
+```js
+module.exports = ReqSocket;
+
+/**
+ * Initialize a new `ReqSocket`.
+ *
+ * @api private
+ */
+
+function ReqSocket() {
+  Socket.call(this);
+  this.n = 0;
+  this.ids = 0;
+  this.callbacks = {};
+  this.identity = this.get('identity');
+  this.use(queue());
+}
+
+/**
+ * Inherits from `Socket.prototype`.
+ */
+
+ReqSocket.prototype.__proto__ = Socket.prototype;
+
+/**
+ * Return a message id.
+ *
+ * @return {String}
+ * @api private
+ */
+
+ReqSocket.prototype.id = function(){
+  return this.identity + ':' + this.ids++;
+};
+
+/**
+ * Emits the "message" event with all message parts
+ * after the null delimeter part.
+ *
+ * @param {net.Socket} sock
+ * @return {Function} closure(msg, multipart)
+ * @api private
+ */
+
+ReqSocket.prototype.onmessage = function(){
+  var self = this;
+
+  return function(buf){
+    var msg = new Message(buf);
+    var id = msg.pop();
+    var fn = self.callbacks[id];
+    if (!fn) return debug('missing callback %s', id);
+    fn.apply(null, msg.args);
+    delete self.callbacks[id];
+  };
+};
+
+/**
+ * Sends `msg` to the remote peers. Appends
+ * the null message part prior to sending.
+ *
+ * @param {Mixed} msg
+ * @api public
+ */
+
+ReqSocket.prototype.send = function(msg){
+  var socks = this.socks;
+  var len = socks.length;
+  var sock = socks[this.n++ % len];
+  var args = slice(arguments);
+
+  if (sock) {
+    var hasCallback = 'function' == typeof args[args.length - 1];
+    if (!hasCallback) args.push(function(){});
+    var fn = args.pop();
+    fn.id = this.id();
+    this.callbacks[fn.id] = fn;
+    args.push(fn.id);
+  }
+
+  if (sock) {
+    sock.write(this.pack(args));
+  } else {
+    debug('no connected peers');
+    this.enqueue(args);
+  }
+};
+```
+
+
 
 #### PubEmitter / SubEmitter
